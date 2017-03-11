@@ -1,4 +1,5 @@
 import os
+from os.path import abspath
 import urllib2
 import shlex
 import subprocess
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_CACHE = 'static-finders-cache'
 DEFAULT_NO_COMPILE_PATTERNS = ['*.min.js']
 DEFAULT_COMPILE_MAP = {
-    '*.js': 'babel {in_file} --presets=es2015 --out-file={out_file}'
+    '*.js': 'babel "{in_file}" --presets=es2015 --out-file="{out_file}"'
 }
 
 
@@ -31,6 +32,7 @@ class VendorFinder(BaseFinder):
             yield path, self.storage
 
     def find(self, path, all=False):
+        path = path.replace('\\', '/')
         vendor_map = settings.STATIC_FINDERS_VENDOR_MAP
         if path not in vendor_map:
             return []
@@ -82,15 +84,17 @@ class CompiledStaticsFinder(AppDirectoriesFinder):
                 if path_match(pattern))
             out_file = os.path.join(settings.BASE_DIR, _get_cache(), path)
             if _newest_file_index(out_file, source):
-                command = compile_command.format(in_file=source,
-                                                 out_file=out_file)
+                command = compile_command.format(in_file=abspath(source),
+                                                 out_file=abspath(out_file))
+                _makedirs(out_file)
                 try:
                     logger.info('running command {}'.format(command))
-                    _makedirs(out_file)
                     subprocess.check_call(shlex.split(command))
                     source = out_file
-                except subprocess.CalledProcessError:
+                except (OSError, subprocess.CalledProcessError):
                     logger.error('failed result for {}'.format(command))
+            else:
+                source = out_file
         return source
 
 
