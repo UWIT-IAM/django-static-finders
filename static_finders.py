@@ -1,11 +1,15 @@
 import os
 from os.path import abspath
-import urllib2
+try:
+    from urllib2 import urlopen
+except ImportError:
+    from urllib.request import urlopen
 import shlex
 import subprocess
 from functools import partial
 from fnmatch import fnmatch
 import logging
+from importlib import import_module
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.contrib.staticfiles.finders import BaseFinder, AppDirectoriesFinder
@@ -15,25 +19,26 @@ logger = logging.getLogger(__name__)
 DEFAULT_CACHE = 'static-finders-cache'
 DEFAULT_NO_COMPILE_PATTERNS = ['*.min.js']
 DEFAULT_COMPILE_MAP = {
-    '*.js': 'babel "{in_file}" --presets=es2015 --out-file="{out_file}"'
+    '*.js': 'npm run babel -- "{in_file}" --out-file="{out_file}"'
 }
 
 
 class VendorFinder(BaseFinder):
     def __init__(self):
-        if not hasattr(settings, 'STATIC_FINDERS_VENDOR_MAP'):
+        self.vendor_map = _get_vendor_map()
+        if not self.vendor_map:
             raise ImproperlyConfigured(
                 'missing required setting STATIC_FINDERS_VENDOR_MAP')
         self.storage = FileSystemStorage(location=_get_cache())
 
     def list(self, ignore_patterns):
-        for path in settings.STATIC_FINDERS_VENDOR_MAP:
+        for path in self.vendor_map:
             self.find(path)
             yield path, self.storage
 
     def find(self, path, all=False):
         path = path.replace('\\', '/')
-        vendor_map = settings.STATIC_FINDERS_VENDOR_MAP
+        vendor_map = self.vendor_map
         if path not in vendor_map:
             return []
 
@@ -41,11 +46,11 @@ class VendorFinder(BaseFinder):
         if not os.path.isfile(cache_path):
             _makedirs(cache_path)
             url = vendor_map[path]
-            response = urllib2.urlopen(url)
+            response = urlopen(url)
             if response.code != 200:
                 raise IOError('{} not found'.format(url))
             with open(cache_path, 'wb') as cache:
-                for chunk in iter(partial(response.read, 1024 * 64), ''):
+                for chunk in iter(partial(response.read, 1024 * 64), b''):
                     cache.write(chunk)
         return cache_path
 
@@ -116,6 +121,16 @@ def _get_compile_map():
 def _get_no_compile_patterns():
     return getattr(settings, 'STATIC_FINDERS_NO_COMPILE_PATTERNS',
                    DEFAULT_NO_COMPILE_PATTERNS)
+
+
+def _get_vendor_map():
+    vendor_map = getattr(settings, 'STATIC_FINDERS_VENDOR_MAP', None)
+    if isinstance(vendor_map, str):
+        module, attr = vendor_map.rsplit('.', 1)
+        vendor_map = getattr(import_module(module), attr)
+        if callable(vendor_map):
+            vendor_map = vendor_map()
+    return vendor_map
 
 
 def _newest_file_index(*file_names):

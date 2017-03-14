@@ -1,0 +1,6 @@
+{
+  "name": "django-static-finders",
+  "scripts": {
+    "babel": "babel --presets=es2015"
+  }
+}

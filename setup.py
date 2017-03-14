@@ -1,7 +1,7 @@
-from setuptools import setup, find_packages
+from setuptools import setup
 
 
 setup(name='django-static-finders',
       version='0.1',
       install_requires=['Django'],
-      packages=find_packages())
+      py_modules='static_finders')
