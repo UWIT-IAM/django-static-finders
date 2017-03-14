@@ -2,5 +2,9 @@
   "name": "django-static-finders",
   "scripts": {
     "babel": "babel --presets=es2015"
+  },
+  "dependencies": {
+    "babel-cli" : "latest",
+    "babel-preset-es2015": "latest"
   }
 }

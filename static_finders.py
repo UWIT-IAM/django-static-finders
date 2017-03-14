@@ -64,14 +64,14 @@ class CompiledStaticsFinder(AppDirectoriesFinder):
     def list(self, ignore_patterns):
         for path, storage in super(self.__class__, self).list(ignore_patterns):
             path_match = partial(fnmatch, path)
-            compile_patterns = _get_compile_map().keys()
+            compile_patterns = _get_compile_map()
             if any(map(path_match, _get_no_compile_patterns())):
                 yield path, storage
             elif not any(map(path_match, compile_patterns)):
                 yield path, storage
             else:
                 found_path = self.find(path)
-                cache = _get_cache()
+                cache = os.path.join(settings.BASE_DIR, _get_cache())
                 if found_path and found_path.startswith(cache):
                     yield path, self.storage
                 else:
@@ -83,9 +83,9 @@ class CompiledStaticsFinder(AppDirectoriesFinder):
         compile_map = _get_compile_map()
         if (source and not all and
                 not any(map(path_match, _get_no_compile_patterns())) and
-                any(map(path_match, compile_map.keys()))):
+                any(map(path_match, compile_map))):
             compile_command = next(
-                command for pattern, command in compile_map.iteritems()
+                command for pattern, command in compile_map.items()
                 if path_match(pattern))
             out_file = os.path.join(settings.BASE_DIR, _get_cache(), path)
             if _newest_file_index(out_file, source):
