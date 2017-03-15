@@ -29,7 +29,8 @@ class VendorFinder(BaseFinder):
         if not self.vendor_map:
             raise ImproperlyConfigured(
                 'missing required setting STATIC_FINDERS_VENDOR_MAP')
-        self.storage = FileSystemStorage(location=_get_cache())
+        self.cache = getattr(settings, 'STATIC_FINDERS_CACHE', DEFAULT_CACHE)
+        self.storage = FileSystemStorage(location=self.cache)
 
     def list(self, ignore_patterns):
         for path in self.vendor_map:
@@ -42,7 +43,7 @@ class VendorFinder(BaseFinder):
         if path not in vendor_map:
             return []
 
-        cache_path = os.path.join(settings.BASE_DIR, _get_cache(), path)
+        cache_path = os.path.join(settings.BASE_DIR, self.cache, path)
         if not os.path.isfile(cache_path):
             _makedirs(cache_path)
             url = vendor_map[path]
@@ -59,35 +60,35 @@ class CompiledStaticsFinder(AppDirectoriesFinder):
     def __init__(self, app_names=None, *args, **kwargs):
         super(self.__class__, self).__init__(app_names=app_names, *args,
                                              **kwargs)
-        self.storage = FileSystemStorage(location=_get_cache())
+        self.cache = getattr(settings, 'STATIC_FINDERS_CACHE', DEFAULT_CACHE)
+        self.storage = FileSystemStorage(location=self.cache)
+        self.compile_map = getattr(settings, 'STATIC_FINDERS_COMPILE_MAP',
+                                   DEFAULT_COMPILE_MAP)
+        self.no_compile_patterns = getattr(
+            settings, 'STATIC_FINDERS_NO_COMPILE_PATTERNS',
+            DEFAULT_NO_COMPILE_PATTERNS)
 
     def list(self, ignore_patterns):
         for path, storage in super(self.__class__, self).list(ignore_patterns):
             path_match = partial(fnmatch, path)
-            compile_patterns = _get_compile_map()
-            if any(map(path_match, _get_no_compile_patterns())):
+            if any(map(path_match, self.no_compile_patterns)):
                 yield path, storage
-            elif not any(map(path_match, compile_patterns)):
+            elif not any(map(path_match, self.compile_map)):
                 yield path, storage
             else:
-                found_path = self.find(path)
-                cache = os.path.join(settings.BASE_DIR, _get_cache())
-                if found_path and found_path.startswith(cache):
-                    yield path, self.storage
-                else:
-                    yield path, storage
+                self.find(path, raise_errors=True)  # trigger a compile
+                yield path, self.storage
 
-    def find(self, path, all=False):
+    def find(self, path, all=False, raise_errors=False):
         source = super(self.__class__, self).find(path, all=all)
         path_match = partial(fnmatch, path)
-        compile_map = _get_compile_map()
         if (source and not all and
-                not any(map(path_match, _get_no_compile_patterns())) and
-                any(map(path_match, compile_map))):
+                not any(map(path_match, self.no_compile_patterns)) and
+                any(map(path_match, self.compile_map))):
             compile_command = next(
-                command for pattern, command in compile_map.items()
+                command for pattern, command in self.compile_map.items()
                 if path_match(pattern))
-            out_file = os.path.join(settings.BASE_DIR, _get_cache(), path)
+            out_file = os.path.join(settings.BASE_DIR, self.cache, path)
             if _newest_file_index(out_file, source):
                 command = compile_command.format(in_file=abspath(source),
                                                  out_file=abspath(out_file))
@@ -98,6 +99,8 @@ class CompiledStaticsFinder(AppDirectoriesFinder):
                     source = out_file
                 except (OSError, subprocess.CalledProcessError):
                     logger.error('failed result for {}'.format(command))
+                    if raise_errors:
+                        raise
             else:
                 source = out_file
         return source
@@ -108,19 +111,6 @@ def _makedirs(file_name):
         os.makedirs(os.path.dirname(file_name))
     except OSError:
         pass
-
-
-def _get_cache():
-    return getattr(settings, 'STATIC_FINDERS_CACHE', DEFAULT_CACHE)
-
-
-def _get_compile_map():
-    return getattr(settings, 'STATIC_FINDERS_COMPILE_MAP', DEFAULT_COMPILE_MAP)
-
-
-def _get_no_compile_patterns():
-    return getattr(settings, 'STATIC_FINDERS_NO_COMPILE_PATTERNS',
-                   DEFAULT_NO_COMPILE_PATTERNS)
 
 
 def _get_vendor_map():

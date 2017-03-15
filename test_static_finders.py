@@ -1,8 +1,10 @@
 import os
 import shutil
+import time
+import subprocess
 from django.conf import settings
 from static_finders import VendorFinder, CompiledStaticsFinder
-from pytest import fixture
+from pytest import fixture, raises
 import logging
 
 
@@ -28,7 +30,7 @@ def test_vendor_finder_find(settings, static_cache):
     assert os.path.isfile(expected_path)
 
 
-def test_compiled_statics_finder_find(settings, static_cache, app_dir):
+def test_compiled_statics_finder_find(static_cache, app_dir):
     path = CompiledStaticsFinder().find('foo.js')
     expected_path = os.path.join(static_cache, 'foo.js')
     assert path == expected_path
@@ -37,13 +39,37 @@ def test_compiled_statics_finder_find(settings, static_cache, app_dir):
     assert out.startswith(b'"use strict";')
 
 
-def test_compiled_statics_finder_list(settings, static_cache, app_dir):
+def test_compiled_statics_finder_list(static_cache, app_dir):
     js, css = CompiledStaticsFinder().list([])
     assert css == ('blah.css', 'storage')
     js_file, js_storage = js
     assert js_file == 'foo.js'
     assert js_storage.location == static_cache
     assert os.path.isfile(os.path.join(static_cache, js_file))
+
+
+def test_compiled_statics_list_exception(settings, static_cache, app_dir):
+    settings.STATIC_FINDERS_COMPILE_MAP = {'*.js': '/bin/false'}
+    with raises((OSError, subprocess.CalledProcessError)):
+        list(CompiledStaticsFinder().list([]))
+
+
+def test_compiled_statics_find_failure(settings, static_cache, app_dir):
+    settings.STATIC_FINDERS_COMPILE_MAP = {'*.js': '/bin/false'}
+    path = CompiledStaticsFinder().find('foo.js')
+    assert path == os.path.join(app_dir, 'foo.js')
+
+
+def test_compiled_statics_find_already_compiled(static_cache, app_dir):
+    os.mkdir(static_cache)
+    cache_file = os.path.join(static_cache, 'foo.js')
+    time.sleep(1)
+    fd = open(cache_file, 'wb')
+    fd.close()
+    mtime = os.path.getmtime(cache_file)
+    path = CompiledStaticsFinder().find('foo.js')
+    assert path == cache_file
+    assert mtime == os.path.getmtime(cache_file)
 
 
 def get_fake_vendor_map():

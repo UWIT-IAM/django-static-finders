@@ -3,3 +3,6 @@
 *.pyc
 .eggs
 *.egg-info
+.cache
+.coverage
+node_modules
