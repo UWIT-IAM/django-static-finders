@@ -1,43 +1,51 @@
+"""
+A collection of django staticfiles finders to facilitate statics management.
+"""
 import os
 from os.path import abspath
-try:
-    from urllib2 import urlopen
-except ImportError:
-    from urllib.request import urlopen
+from six.moves.urllib.request import urlopen
 import shlex
 import subprocess
 from functools import partial
 from fnmatch import fnmatch
+from itertools import chain
 import logging
 from importlib import import_module
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.contrib.staticfiles.finders import BaseFinder, AppDirectoriesFinder
+from django.contrib.staticfiles.finders import BaseFinder
 from django.contrib.staticfiles.storage import FileSystemStorage
-
 logger = logging.getLogger(__name__)
 DEFAULT_CACHE = 'static-finders-cache'
-DEFAULT_NO_COMPILE_PATTERNS = ['*.min.js']
-DEFAULT_COMPILE_MAP = {
-    '*.js': 'npm run babel -- "{in_file}" --out-file="{out_file}"'
-}
 
 
 class VendorFinder(BaseFinder):
+    """
+    VendorFinder will take a static name -> url dictionary and fetch the
+    static from its source so it need not be duplicated in a repository.
+    The map is a dictionary/generator pointed to by STATIC_FINDERS_VENDOR_MAP,
+    and the files are cached in the STATIC_FINDERS_CACHE. The collectstatic
+    command will locate the files from there.
+    """
     def __init__(self):
         self.vendor_map = _get_vendor_map()
         if not self.vendor_map:
-            raise ImproperlyConfigured(
-                'missing required setting STATIC_FINDERS_VENDOR_MAP')
+            err = 'missing required setting STATIC_FINDERS_VENDOR_MAP'
+            raise ImproperlyConfigured(err)
         self.cache = getattr(settings, 'STATIC_FINDERS_CACHE', DEFAULT_CACHE)
         self.storage = FileSystemStorage(location=self.cache)
 
     def list(self, ignore_patterns):
+        """List all files in vendor map, fetching them if necessary."""
         for path in self.vendor_map:
             self.find(path)
             yield path, self.storage
 
     def find(self, path, all=False):
+        """
+        Locate a file if it's in the vendor map. If it's not in the cache,
+        fetch the static from its url.
+        """
         path = path.replace('\\', '/')
         vendor_map = self.vendor_map
         if path not in vendor_map:
@@ -45,65 +53,88 @@ class VendorFinder(BaseFinder):
 
         cache_path = os.path.join(settings.BASE_DIR, self.cache, path)
         if not os.path.isfile(cache_path):
-            _makedirs(cache_path)
             url = vendor_map[path]
-            response = urlopen(url)
-            if response.code != 200:
-                raise IOError('{} not found'.format(url))
-            with open(cache_path, 'wb') as cache:
-                for chunk in iter(partial(response.read, 1024 * 64), b''):
-                    cache.write(chunk)
+            _fetch_url(url, cache_path)
         return cache_path
 
 
-class CompiledStaticsFinder(AppDirectoriesFinder):
+class CompiledStaticsFinder(BaseFinder):
+    """
+    CompiledStaticsFinder will compile static files according to the
+    configured STATIC_FINDERS_COMPILE_MAP, caching the results in
+    STATIC_FINDERS_CACHE.
+    """
+    DEFAULT_IGNORE_PATTERNS = ['*.min.js']
+    DEFAULT_COMPILE_MAP = {
+        '*.js': 'npm run babel -- "{infile}" --out-file="{outfile}"'
+    }
+    SUPPORTED_FINDERS = [
+        'django.contrib.staticfiles.finders.FileSystemFinder',
+        'django.contrib.staticfiles.finders.AppDirectoriesFinder'
+    ]
+
     def __init__(self, app_names=None, *args, **kwargs):
-        super(self.__class__, self).__init__(app_names=app_names, *args,
-                                             **kwargs)
         self.cache = getattr(settings, 'STATIC_FINDERS_CACHE', DEFAULT_CACHE)
         self.storage = FileSystemStorage(location=self.cache)
         self.compile_map = getattr(settings, 'STATIC_FINDERS_COMPILE_MAP',
-                                   DEFAULT_COMPILE_MAP)
-        self.no_compile_patterns = getattr(
-            settings, 'STATIC_FINDERS_NO_COMPILE_PATTERNS',
-            DEFAULT_NO_COMPILE_PATTERNS)
+                                   self.DEFAULT_COMPILE_MAP)
+        self.ignore_patterns = getattr(
+            settings, 'STATIC_FINDERS_IGNORE_PATTERNS',
+            self.DEFAULT_IGNORE_PATTERNS)
+        self.finders = [_import_attribute(finder)()
+                        for finder in settings.STATICFILES_FINDERS
+                        if finder in self.SUPPORTED_FINDERS]
 
     def list(self, ignore_patterns):
-        for path, storage in super(self.__class__, self).list(ignore_patterns):
-            path_match = partial(fnmatch, path)
-            if any(map(path_match, self.no_compile_patterns)):
-                yield path, storage
-            elif not any(map(path_match, self.compile_map)):
-                yield path, storage
-            else:
-                self.find(path, raise_errors=True)  # trigger a compile
+        """
+        List all of the compiled statics, compiling them if necessary.
+        collectstatic will call this to generate its statics.
+        """
+        list_gens = (finder.list(ignore_patterns) for finder in self.finders)
+        for path, storage in chain(*list_gens):
+            if self.find(path, raise_errors=True):
                 yield path, self.storage
 
     def find(self, path, all=False, raise_errors=False):
-        source = super(self.__class__, self).find(path, all=all)
-        path_match = partial(fnmatch, path)
-        if (source and not all and
-                not any(map(path_match, self.no_compile_patterns)) and
-                any(map(path_match, self.compile_map))):
-            compile_command = next(
-                command for pattern, command in self.compile_map.items()
-                if path_match(pattern))
-            out_file = os.path.join(settings.BASE_DIR, self.cache, path)
-            if _newest_file_index(out_file, source):
-                command = compile_command.format(in_file=abspath(source),
-                                                 out_file=abspath(out_file))
-                _makedirs(out_file)
-                try:
-                    logger.info('running command {}'.format(command))
-                    subprocess.check_call(shlex.split(command))
-                    source = out_file
-                except (OSError, subprocess.CalledProcessError):
-                    logger.error('failed result for {}'.format(command))
-                    if raise_errors:
-                        raise
-            else:
-                source = out_file
-        return source
+        """
+        Find path according to our supported finders, and if it matches
+        our compile_map, return a path to the compiled version.
+        """
+        found_paths = (finder.find(path, all=all) for finder in self.finders)
+        source = next((f for f in found_paths if f), [])
+        if not source:
+            return source
+        if any(fnmatch(path, pattern) for pattern in self.ignore_patterns):
+            return []
+        for pattern, command in self.compile_map.items():
+            if fnmatch(path, pattern):
+                break  # get the first matching command
+        else:
+            return []
+        outfile = os.path.join(settings.BASE_DIR, self.cache, path)
+        if _newest_file_index(outfile, source):
+            kwargs = dict(infile=abspath(source), outfile=abspath(outfile))
+            command = command.format(**kwargs)
+            _makedirs(outfile)
+            try:
+                logger.info('running command {}'.format(command))
+                subprocess.check_call(shlex.split(command))
+            except (OSError, subprocess.CalledProcessError):
+                logger.error('failed result for {}'.format(command))
+                if raise_errors:
+                    raise
+                return []
+        return outfile
+
+
+def _fetch_url(url, destination_path):
+    _makedirs(destination_path)
+    response = urlopen(url)
+    if response.code != 200:
+        raise IOError('{} not found'.format(url))
+    with open(destination_path, 'wb') as cache:
+        for chunk in iter(partial(response.read, 1024 * 64), b''):
+            cache.write(chunk)
 
 
 def _makedirs(file_name):
@@ -113,17 +144,23 @@ def _makedirs(file_name):
         pass
 
 
+def _import_attribute(path):
+    module, attr = path.rsplit('.', 1)
+    return getattr(import_module(module), attr)
+
+
 def _get_vendor_map():
+    """Load the vendor map from a dict or a string pointing to callable."""
     vendor_map = getattr(settings, 'STATIC_FINDERS_VENDOR_MAP', None)
     if isinstance(vendor_map, str):
-        module, attr = vendor_map.rsplit('.', 1)
-        vendor_map = getattr(import_module(module), attr)
+        vendor_map = _import_attribute(vendor_map)
         if callable(vendor_map):
             vendor_map = vendor_map()
-    return vendor_map
+    return dict(vendor_map)
 
 
 def _newest_file_index(*file_names):
+    """Given file_names, return the index to the most recent one."""
     def getmtime(file_name):
         try:
             return os.path.getmtime(file_name)
