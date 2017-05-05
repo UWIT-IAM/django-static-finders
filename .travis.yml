@@ -4,6 +4,7 @@ python:
   - "3.6"
 node_js: "node"
 install:
+  - pip install -U pip setuptools
   - pip install -U -r requirements.txt
   - pip install python-coveralls
   - pip install nodeenv
