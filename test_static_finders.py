@@ -4,7 +4,7 @@ import time
 import subprocess
 from django.conf import settings
 from static_finders import VendorFinder, CompiledStaticsFinder
-from pytest import fixture, raises
+from pytest import fixture, raises, mark
 import logging
 
 
@@ -16,8 +16,8 @@ logging.basicConfig()
 def settings(settings):
     settings.BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     settings.STATIC_FINDERS_CACHE = 'pytest-static-cache'
-    settings.STATIC_FINDERS_VENDOR_MAP = ('test_static_finders'
-                                          '.get_fake_vendor_map')
+    settings.STATIC_FINDERS_VENDOR_MAP = (
+        'test_static_finders.get_fake_vendor_map')
     return settings
 
 
@@ -40,8 +40,7 @@ def test_compiled_statics_finder_find(static_cache, app_dir):
 
 
 def test_compiled_statics_finder_list(static_cache, app_dir):
-    js, css = CompiledStaticsFinder().list([])
-    assert css == ('blah.css', 'storage')
+    js, = CompiledStaticsFinder().list([])
     js_file, js_storage = js
     assert js_file == 'foo.js'
     assert js_storage.location == static_cache
@@ -57,7 +56,7 @@ def test_compiled_statics_list_exception(settings, static_cache, app_dir):
 def test_compiled_statics_find_failure(settings, static_cache, app_dir):
     settings.STATIC_FINDERS_COMPILE_MAP = {'*.js': '/bin/false'}
     path = CompiledStaticsFinder().find('foo.js')
-    assert path == os.path.join(app_dir, 'foo.js')
+    assert not path
 
 
 def test_compiled_statics_find_already_compiled(static_cache, app_dir):
@@ -72,9 +71,14 @@ def test_compiled_statics_find_already_compiled(static_cache, app_dir):
     assert mtime == os.path.getmtime(cache_file)
 
 
+@mark.parametrize('file_name', ['foo.min.js', '404.js'])
+def test_compiled_statics_find_not_found(file_name):
+    assert not CompiledStaticsFinder().find(file_name)
+
+
 def get_fake_vendor_map():
-    return {'jquery.min.js': ('https://ajax.googleapis.com/ajax/libs'
-                              '/jquery/1.11.3/jquery.min.js')}
+    yield 'jquery.min.js', (
+        'https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js')
 
 
 @fixture
@@ -93,16 +97,14 @@ def app_dir(settings, request, monkeypatch):
     app_dir = os.path.join(settings.BASE_DIR, 'fake_app')
     shutil.rmtree(app_dir, True)
     from django.contrib.staticfiles.finders import AppDirectoriesFinder
+    mock_files = ('foo.js', 'blah.css', 'foo.min.js')
 
     def mock_find(self, name, all=None):
-        if name in ('foo.js', 'blah.css'):
-            return os.path.join(app_dir, name)
-        else:
-            return []
+        return os.path.join(app_dir, name) if name in mock_files else []
 
     def mock_list(self, ignore_patterns):
-        yield 'foo.js', 'storage'
-        yield 'blah.css', 'storage'
+        return ((f, 'storage') for f in mock_files)
+
     monkeypatch.setattr(AppDirectoriesFinder, 'find', mock_find)
     monkeypatch.setattr(AppDirectoriesFinder, 'list', mock_list)
     os.mkdir(app_dir)
