@@ -6,6 +6,7 @@ from os.path import abspath
 from six.moves.urllib.request import urlopen
 import shlex
 import subprocess
+import sys
 from functools import partial
 from fnmatch import fnmatch
 from itertools import chain
@@ -118,7 +119,7 @@ class CompiledStaticsFinder(BaseFinder):
             _makedirs(outfile)
             try:
                 logger.info('running command {}'.format(command))
-                subprocess.check_call(shlex.split(command))
+                _check_call(command)
             except (OSError, subprocess.CalledProcessError):
                 logger.error('failed result for {}'.format(command))
                 if raise_errors:
@@ -170,3 +171,12 @@ def _newest_file_index(*file_names):
     mtimes = map(getmtime, file_names)
     _, index = max((value, i) for i, value in enumerate(mtimes))
     return index
+
+
+def _check_call(command):
+    shell = False
+    args = shlex.split(command)
+    if sys.platform == 'win32':
+        args = command
+        shell = True
+    return subprocess.check_call(args, shell=shell)
