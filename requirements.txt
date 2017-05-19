@@ -1,4 +1,4 @@
-six
+requests
 Django
 pytest
 pytest-django
