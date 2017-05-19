@@ -129,11 +129,12 @@ class CompiledStaticsFinder(BaseFinder):
 
 def _fetch_url(url, destination_path):
     _makedirs(destination_path)
-    response = requests.get(url)
+    response = requests.get(url, stream=True)
     if response.status_code != 200:
         raise IOError('{} not found'.format(url))
     with open(destination_path, 'wb') as cache:
-            cache.write(response.content)
+        for chunk in response.iter_content(64 * 1024):
+            cache.write(chunk)
 
 
 def _makedirs(file_name):
