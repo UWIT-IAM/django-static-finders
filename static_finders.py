@@ -3,11 +3,10 @@ A collection of django staticfiles finders to facilitate statics management.
 """
 import os
 from os.path import abspath
-from six.moves.urllib.request import urlopen
+import requests
 import shlex
 import subprocess
 import sys
-from functools import partial
 from fnmatch import fnmatch
 from itertools import chain
 import logging
@@ -130,11 +129,11 @@ class CompiledStaticsFinder(BaseFinder):
 
 def _fetch_url(url, destination_path):
     _makedirs(destination_path)
-    response = urlopen(url)
-    if response.code != 200:
+    response = requests.get(url, stream=True)
+    if response.status_code != 200:
         raise IOError('{} not found'.format(url))
     with open(destination_path, 'wb') as cache:
-        for chunk in iter(partial(response.read, 1024 * 64), b''):
+        for chunk in response.iter_content(64 * 1024):
             cache.write(chunk)
 
 
