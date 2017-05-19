@@ -7,7 +7,7 @@ import requests
 import shlex
 import subprocess
 import sys
-from functools import partial
+from io import BytesIO
 from fnmatch import fnmatch
 from itertools import chain
 import logging
@@ -134,8 +134,7 @@ def _fetch_url(url, destination_path):
     if response.status_code != 200:
         raise IOError('{} not found'.format(url))
     with open(destination_path, 'wb') as cache:
-        for chunk in iter(partial(response.content, 1024 * 64), b''):
-            cache.write(chunk)
+            cache.write(BytesIO(response.content))
 
 
 def _makedirs(file_name):
