@@ -7,7 +7,6 @@ import requests
 import shlex
 import subprocess
 import sys
-from io import BytesIO
 from fnmatch import fnmatch
 from itertools import chain
 import logging
