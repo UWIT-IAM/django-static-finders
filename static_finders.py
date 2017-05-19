@@ -134,7 +134,7 @@ def _fetch_url(url, destination_path):
     if response.status_code != 200:
         raise IOError('{} not found'.format(url))
     with open(destination_path, 'wb') as cache:
-            cache.write(BytesIO(response.content))
+            cache.write(response.content)
 
 
 def _makedirs(file_name):
