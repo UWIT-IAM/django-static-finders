@@ -3,8 +3,9 @@ import shutil
 import time
 import subprocess
 from django.conf import settings
-from static_finders import VendorFinder, CompiledStaticsFinder
+from static_finders import VendorFinder, CompiledStaticsFinder, _fetch_url
 from pytest import fixture, raises, mark
+from mock import MagicMock
 import logging
 
 
@@ -28,6 +29,19 @@ def test_vendor_finder_find(settings, static_cache):
     path = VendorFinder().find('jquery.min.js')
     assert path == expected_path
     assert os.path.isfile(expected_path)
+
+
+def test_fetch_url_no_fallback(static_cache, mock_requests):
+    destination = os.path.join(static_cache, 'foo.txt')
+    with raises(Exception):
+        _fetch_url('https://example.com', destination)
+
+
+def test_fetch_url_fallback(static_cache, mock_requests, settings):
+    settings.STATIC_FINDERS_DO_VERIFY_FALLBACK = True
+    destination = os.path.join(static_cache, 'foo.txt')
+    _fetch_url('https://example.com', destination)
+    assert os.path.isfile(destination)
 
 
 def test_compiled_statics_finder_find(static_cache, app_dir):
@@ -90,6 +104,19 @@ def static_cache(settings, request):
         shutil.rmtree(cache_path, True)
     request.addfinalizer(fin)
     return cache_path
+
+
+@fixture
+def mock_requests(monkeypatch):
+    def _get(url, verify=True, **kwargs):
+        if verify:
+            raise Exception('SNI Certificate mismatch')
+        response = MagicMock()
+        response.status_code = 200
+        response.iter_content = lambda x: [b'hello world']
+        return response
+    monkeypatch.setattr('static_finders.requests.get', _get)
+    return monkeypatch
 
 
 @fixture
