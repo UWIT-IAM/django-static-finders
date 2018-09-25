@@ -1,7 +1,0 @@
-requests
-Django
-pytest
-pytest-django
-pytest-pep8
-pytest-cov
-mock
